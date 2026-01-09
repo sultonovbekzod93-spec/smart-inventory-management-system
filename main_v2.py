@@ -1,254 +1,219 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, flash
 import sqlite3
-from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+app.secret_key = "smart_ombor_pro_v4_2026"
 
-# --- 1. БАЗАНИ СОЗЛАШ ---
+# 1. МАЪЛУМОТЛАР БАЗАСИ
+def get_db_connection():
+    conn = sqlite3.connect('smart_ombor_v4.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def db_init():
-    conn = sqlite3.connect('shifo_pro.db')
-    conn.execute('CREATE TABLE IF NOT EXISTS Doctors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, spec TEXT)')
-    conn.execute('CREATE TABLE IF NOT EXISTS Orders (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id INTEGER, p_name TEXT, p_surname TEXT, time TEXT, date TEXT)')
+    conn = get_db_connection()
+    conn.execute('CREATE TABLE IF NOT EXISTS Mahsulotlar (id INTEGER PRIMARY KEY AUTOINCREMENT, nomi TEXT UNIQUE, miqdori INTEGER, narhi INTEGER)')
+    conn.execute('CREATE TABLE IF NOT EXISTS Users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT)')
+    if not conn.execute('SELECT * FROM Users WHERE username = ?', ('admin',)).fetchone():
+        conn.execute('INSERT INTO Users (username, password) VALUES (?, ?)', ('admin', generate_password_hash('1')))
     conn.commit()
     conn.close()
 
-# --- 2. ИНТЕРФЕЙС (Янгиланган Дизайн) ---
-html_kod = """
+# 2. ЯНГИЛАНГАН PRO ДИЗАЙН (HTML + CSS)
+PRO_HTML = """
 <!DOCTYPE html>
-<html lang="uz">
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Shifo</title>
     <style>
-        :root { --primary: #2563eb; --secondary: #10b981; --dark: #1e293b; --light: #f8fafc; }
-        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--light); margin: 0; padding: 15px; color: var(--dark); }
-        .container { max-width: 500px; margin: 0 auto; }
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f0f4f8; margin: 0; padding: 10px; }
+        .app-card { width: 100%; max-width: 480px; background: white; border-radius: 25px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); margin: auto; }
         
-        /* Юқори навигация */
-        .tabs { display: flex; background: #e2e8f0; padding: 5px; border-radius: 15px; margin-bottom: 20px; }
-        .tab { flex: 1; padding: 12px; border: none; border-radius: 12px; cursor: pointer; font-weight: 600; background: transparent; transition: 0.3s; }
-        .tab.active { background: white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); color: var(--primary); }
+        /* Юқори қисм ва Чиқиш тугмаси */
+        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .title { color: #1a73e8; font-size: 22px; font-weight: bold; margin: 0; }
+        .logout-link { color: #d93025; text-decoration: none; font-weight: bold; font-size: 14px; padding: 5px 10px; border: 1px solid #fad2cf; border-radius: 8px; background: #fff1f1; }
 
-        .card { background: white; border-radius: 24px; padding: 25px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); }
-        h2 { margin: 0 0 20px 0; font-size: 24px; text-align: center; }
+        /* Статистика */
+        .stats { display: flex; gap: 10px; margin-bottom: 20px; }
+        .stat-box { flex: 1; background: #eef5ff; padding: 12px; border-radius: 15px; text-align: center; border: 1px solid #d0e3ff; }
+        .stat-label { font-size: 10px; color: #777; text-transform: uppercase; }
+        .stat-val { font-size: 15px; font-weight: bold; color: #1a73e8; display: block; margin-top: 4px; }
 
-        select, input { width: 100%; padding: 14px; margin: 10px 0; border: 1.5px solid #e2e8f0; border-radius: 12px; box-sizing: border-box; font-size: 16px; outline: none; }
-        select:focus, input:focus { border-color: var(--primary); }
-        
-        .btn { width: 100%; padding: 15px; background: var(--primary); color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.2s; }
-        .btn:active { transform: scale(0.98); }
-
-        /* Вақт жадвали */
-        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 20px 0; }
-        .slot { padding: 12px; border: 1.5px solid var(--primary); border-radius: 10px; cursor: pointer; color: var(--primary); text-align: center; font-weight: 600; font-size: 14px; }
-        .slot.busy { background: #f1f5f9; border-color: #cbd5e1; color: #94a3b8; cursor: not-allowed; }
-        .slot.past { background: #fee2e2; border-color: #fecaca; color: #ef4444; cursor: not-allowed; opacity: 0.6; }
-        .slot.selected { background: var(--primary) !important; color: white !important; }
+        /* Маълумот киритиш */
+        .input-group { background: #f8f9fa; padding: 15px; border-radius: 18px; margin-bottom: 20px; }
+        input { width: 100%; padding: 12px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 10px; box-sizing: border-box; outline: none; }
+        .btn-add { width: 100%; padding: 14px; background: #28a745; color: white; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; }
 
         /* Жадвал */
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th { text-align: left; padding: 12px; border-bottom: 2px solid #f1f5f9; font-size: 14px; color: #64748b; }
-        td { padding: 12px; border-bottom: 1px solid #f1f5f9; font-size: 15px; }
-        .cancel-btn { color: #ef4444; cursor: pointer; border: none; background: none; font-size: 18px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #1a73e8; color: white; padding: 10px; font-size: 13px; text-align: center; }
+        th:first-child { border-radius: 10px 0 0 0; }
+        th:last-child { border-radius: 0 10px 0 0; }
+        td { padding: 12px 8px; text-align: center; border-bottom: 1px solid #eee; font-size: 14px; }
+        
+        /* Тугмачалар */
+        .action-btns { display: flex; gap: 5px; justify-content: center; }
+        .btn-sell { background: #ff9800; color: white; border: none; padding: 8px; border-radius: 8px; cursor: pointer; }
+        .btn-del { background: #f44336; color: white; border: none; padding: 8px; border-radius: 8px; cursor: pointer; }
     </style>
 </head>
-<body onload="initApp()">
-
-<div class="container">
-    <div class="tabs">
-        <button class="tab active" id="t-p" onclick="showPage('p')">Бемор</button>
-        <button class="tab" id="t-d" onclick="showPage('d')">Шифокор</button>
-        <button class="tab" id="t-a" onclick="showPage('a')">Админ</button>
-    </div>
-
-    <div id="p-page" class="card">
-        <h2>🩺 Навбат олиш</h2>
-        <select id="p-select" onchange="loadSlots()">
-            <option value="">Шифокорни танланг...</option>
-        </select>
-        <div class="grid" id="slots-grid"></div>
-        <div id="p-form" style="display:none">
-            <input id="p-name" placeholder="Исмингиз">
-            <input id="p-surname" placeholder="Фамилиянгиз">
-            <button class="btn" style="background: var(--secondary)" onclick="bookOrder()">✅ Тасдиқлаш</button>
+<body>
+    <div class="app-card">
+        <div class="top-bar">
+            <h1 class="title">📦 Smart Ombor PRO</h1>
+            <a href="/logout" class="logout-link">🚪 Чиқиш</a>
         </div>
-    </div>
 
-    <div id="d-page" class="card" style="display:none">
-        <h2>👨‍⚕️ Иш жадвали</h2>
-        <select id="d-select" onchange="loadDoctorOrders()">
-            <option value="">Ўз исмингизни танланг...</option>
-        </select>
-        <div id="d-list-content">
-            <table>
-                <thead><tr><th>Вақт</th><th>Бемор</th><th></th></tr></thead>
-                <tbody id="orders-table"></tbody>
-            </table>
+        <div class="stats">
+            <div class="stat-box"><span class="stat-label">Жами товар</span><span id="st-qty" class="stat-val">0 та</span></div>
+            <div class="stat-box"><span class="stat-label">Умумий қиймат</span><span id="st-sum" class="stat-val">0 сўм</span></div>
         </div>
-    </div>
 
-    <div id="a-page" class="card" style="display:none">
-        <h2>⚙️ Бошқарув</h2>
-        <input type="password" id="admin-pass" placeholder="Админ пароли">
-        <div id="admin-content" style="display:none">
-            <input id="new-doc" placeholder="Янги шифокор Ф.И.Ш.">
-            <button class="btn" onclick="addDoctor()">➕ Қўшиш</button>
-            <div id="admin-doc-list" style="margin-top:20px"></div>
+        <div class="input-group">
+            <input type="text" id="m-nomi" placeholder="Маҳсулот номи">
+            <input type="number" id="m-soni" placeholder="Миқдори">
+            <input type="number" id="m-narhi" placeholder="Нарҳи (сўм)">
+            <button class="btn-add" onclick="qoshish()">➕ ОМБОРГА ҚЎШИШ</button>
         </div>
-        <button class="btn" id="pass-btn" onclick="checkPass()">Кириш</button>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Номи</th>
+                    <th>Қолдиқ</th>
+                    <th>Нарх</th>
+                    <th>Амал</th>
+                </tr>
+            </thead>
+            <tbody id="table-body"></tbody>
+        </table>
     </div>
-</div>
 
-<script>
-    let selTime = "";
-    const ADMIN_KEY = "1234"; // Профессионал пароль
-    const times = ["09:00", "09:30", "10:00", "10:30", "11:00", "11:30", "14:00", "14:30", "15:00", "15:30", "16:00", "16:30"];
-
-    function showPage(p) {
-        document.getElementById('p-page').style.display = p=='p'?'block':'none';
-        document.getElementById('d-page').style.display = p=='d'?'block':'none';
-        document.getElementById('a-page').style.display = p=='a'?'block':'none';
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.getElementById('t-'+p).classList.add('active');
-    }
-
-    function checkPass() {
-        if(document.getElementById('admin-pass').value === ADMIN_KEY) {
-            document.getElementById('admin-content').style.display = 'block';
-            document.getElementById('admin-pass').style.display = 'none';
-            document.getElementById('pass-btn').style.display = 'none';
-        } else { alert("Пароль хато!"); }
-    }
-
-    async function initApp() {
-        let res = await fetch('/api/get_docs');
-        let docs = await res.json();
-        let ps = document.getElementById('p-select'), ds = document.getElementById('d-select'), al = document.getElementById('admin-doc-list');
-        ps.innerHTML = ds.innerHTML = '<option value="">Танланг...</option>';
-        al.innerHTML = "<b>Шифокорлар:</b>";
-        docs.forEach(d => {
-            let opt = `<option value="${d[0]}">${d[1]}</option>`;
-            ps.innerHTML += opt; ds.innerHTML += opt;
-            al.innerHTML += `<div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #f1f5f9">
-                <span>${d[1]}</span><button onclick="delDoc(${d[0]})" style="color:red; border:none; background:none; cursor:pointer">🗑️</button>
-            </div>`;
-        });
-    }
-
-    async function loadSlots() {
-        let dId = document.getElementById('p-select').value;
-        if(!dId) return;
-        let busy = await (await fetch('/api/get_busy/'+dId)).json();
-        let grid = document.getElementById('slots-grid');
-        grid.innerHTML = "";
-        
-        let now = new Date();
-        let curTime = now.getHours() + ":" + (now.getMinutes()<10?'0':'') + now.getMinutes();
-
-        times.forEach(t => {
-            let isBusy = busy.includes(t);
-            let isPast = t < curTime; // Вақт чеклов (4-функция)
-            let div = document.createElement('div');
-            div.className = `slot ${isBusy?'busy':''} ${isPast?'past':''}`;
-            div.innerText = t;
-            if(!isBusy && !isPast) div.onclick = () => {
-                selTime = t;
-                document.querySelectorAll('.slot').forEach(s => s.classList.remove('selected'));
-                div.classList.add('selected');
-                document.getElementById('p-form').style.display = 'block';
-            };
-            grid.appendChild(div);
-        });
-    }
-
-    async function loadDoctorOrders() {
-        let dId = document.getElementById('d-select').value;
-        if(!dId) return;
-        let orders = await (await fetch('/api/get_orders/'+dId)).json();
-        let table = document.getElementById('orders-table');
-        table.innerHTML = orders.length ? "" : "<tr><td colspan='3'>Навбат йўқ</td></tr>";
-        orders.forEach(o => {
-            table.innerHTML += `<tr><td><b>${o[4]}</b></td><td>${o[2]} ${o[3]}</td>
-            <td><button class="cancel-btn" onclick="cancelOrder(${o[0]})">🚫</button></td></tr>`;
-        });
-    }
-
-    async function bookOrder() {
-        let dId = document.getElementById('p-select').value;
-        let n = document.getElementById('p-name').value, s = document.getElementById('p-surname').value;
-        if(!n || !s) return alert("Маълумотни тўлдиринг!");
-        await fetch('/api/book', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({doc_id:dId, name:n, surname:s, time:selTime})});
-        alert("Навбат олинди!"); location.reload();
-    }
-
-    async function cancelOrder(id) {
-        if(confirm("Бекор қилинсинми?")) {
-            await fetch('/api/cancel/'+id);
-            loadDoctorOrders();
+    <script>
+        async function yuklash() {
+            let res = await fetch('/api/mahsulotlar');
+            let data = await res.json();
+            let h = ""; let q = 0; let s = 0;
+            data.forEach(m => {
+                h += `<tr>
+                    <td><b>${m.nomi}</b></td>
+                    <td>${m.miqdori} та</td>
+                    <td>${Number(m.narhi).toLocaleString()}</td>
+                    <td class="action-btns">
+                        <button class="btn-sell" onclick="sotish(${m.id})" title="Сотиш">🛒</button>
+                        <button class="btn-del" onclick="uchirish(${m.id})" title="Ўчириш">🗑️</button>
+                    </td>
+                </tr>`;
+                q += Number(m.miqdori);
+                s += (Number(m.miqdori) * Number(m.narhi));
+            });
+            document.getElementById('table-body').innerHTML = h;
+            document.getElementById('st-qty').innerText = q + " та";
+            document.getElementById('st-sum').innerText = s.toLocaleString() + " сўм";
         }
-    }
 
-    async function addDoctor() {
-        let n = document.getElementById('new-doc').value;
-        await fetch('/api/add_doc', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:n})});
-        document.getElementById('new-doc').value = ""; initApp();
-    }
+        async function qoshish() {
+            let n = document.getElementById('m-nomi').value.trim();
+            let s = document.getElementById('m-soni').value;
+            let p = document.getElementById('m-narhi').value;
+            if(!n || s <= 0 || p <= 0) return alert("Тўғри тўлдиринг!");
+            await fetch('/api/qoshish', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({nomi: n, miqdori: s, narhi: p})
+            });
+            yuklash(); document.querySelectorAll('input').forEach(i => i.value='');
+        }
 
-    async function delDoc(id) { if(confirm("Ўчирилсинми?")) { await fetch('/api/del_doc/'+id); initApp(); } }
-</script>
+        async function sotish(id) {
+            let s = prompt("Қанча сотмоқчисиз?");
+            if(!s || s <= 0) return;
+            let res = await fetch('/api/sotish', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({id: id, miqdori: s})
+            });
+            let data = await res.json();
+            if(!data.ok) alert(data.msg);
+            yuklash();
+        }
+
+        async function uchirish(id) {
+            if(confirm("Ўчирилсинми?")) { await fetch('/api/uchirish/'+id, {method:'POST'}); yuklash(); }
+        }
+        window.onload = yuklash;
+    </script>
 </body>
 </html>
 """
 
-# --- 3. BACKEND (PYTHON) ---
+# 3. BACKEND (ЛОГИКА)
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        u, p = request.form.get('u', '').strip(), request.form.get('p', '').strip()
+        conn = get_db_connection()
+        user = conn.execute('SELECT * FROM Users WHERE username = ?', (u,)).fetchone()
+        conn.close()
+        if user and check_password_hash(user['password'], p):
+            session['auth'] = True
+            return redirect(url_for('index'))
+        flash("Хато!")
+    return render_template_string("""
+        <div style="max-width:300px; margin:100px auto; text-align:center;">
+            <h2>📦 Smart Ombor</h2>
+            <form method="POST">
+                <input name="u" placeholder="Логин" style="width:100%; padding:10px; margin:5px 0;">
+                <input type="password" name="p" placeholder="Пароль" style="width:100%; padding:10px; margin:5px 0;">
+                <button type="submit" style="width:100%; padding:10px; background:#1a73e8; color:white; border:none;">КИРИШ</button>
+            </form>
+        </div>
+    """)
+
 @app.route('/')
-def index(): return render_template_string(html_kod)
+def index():
+    if not session.get('auth'): return redirect(url_for('login'))
+    return render_template_string(PRO_HTML)
 
-@app.route('/api/add_doc', methods=['POST'])
-def add_doc():
-    conn = sqlite3.connect('shifo_pro.db')
-    conn.execute("INSERT INTO Doctors (name) VALUES (?)", (request.json['name'],))
-    conn.commit(); conn.close(); return jsonify(True)
+@app.route('/api/mahsulotlar')
+def get_m():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM Mahsulotlar").fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in rows])
 
-@app.route('/api/get_docs')
-def get_docs():
-    conn = sqlite3.connect('shifo_pro.db')
-    res = conn.execute("SELECT * FROM Doctors").fetchall()
-    conn.close(); return jsonify(res)
-
-@app.route('/api/get_busy/<int:d_id>')
-def get_busy(d_id):
-    conn = sqlite3.connect('shifo_pro.db')
-    res = conn.execute("SELECT time FROM Orders WHERE doc_id = ?", (d_id,)).fetchall()
-    conn.close(); return jsonify([r[0] for r in res])
-
-@app.route('/api/get_orders/<int:d_id>')
-def get_orders(d_id):
-    conn = sqlite3.connect('shifo_pro.db')
-    res = conn.execute("SELECT * FROM Orders WHERE doc_id = ? ORDER BY time ASC", (d_id,)).fetchall()
-    conn.close(); return jsonify(res)
-
-@app.route('/api/book', methods=['POST'])
-def book():
+@app.route('/api/qoshish', methods=['POST'])
+def qosh():
     d = request.json
-    conn = sqlite3.connect('shifo_pro.db')
-    conn.execute("INSERT INTO Orders (doc_id, p_name, p_surname, time) VALUES (?,?,?,?)", (d['doc_id'], d['name'], d['surname'], d['time']))
-    conn.commit(); conn.close(); return jsonify(True)
+    conn = get_db_connection()
+    check = conn.execute("SELECT id FROM Mahsulotlar WHERE nomi = ?", (d['nomi'],)).fetchone()
+    if check:
+        conn.execute("UPDATE Mahsulotlar SET miqdori = miqdori + ? WHERE id = ?", (d['miqdori'], check['id']))
+    else:
+        conn.execute("INSERT INTO Mahsulotlar (nomi, miqdori, narhi) VALUES (?, ?, ?)", (d['nomi'], d['miqdori'], d['narhi']))
+    conn.commit(); conn.close(); return jsonify({"ok": True})
 
-@app.route('/api/cancel/<int:id>')
-def cancel(id):
-    conn = sqlite3.connect('shifo_pro.db')
-    conn.execute("DELETE FROM Orders WHERE id = ?", (id,))
-    conn.commit(); conn.close(); return jsonify(True)
+@app.route('/api/sotish', methods=['POST'])
+def sotish():
+    d = request.json
+    conn = get_db_connection()
+    m = conn.execute("SELECT miqdori FROM Mahsulotlar WHERE id = ?", (d['id'],)).fetchone()
+    if m and m['miqdori'] >= int(d['miqdori']):
+        conn.execute("UPDATE Mahsulotlar SET miqdori = miqdori - ? WHERE id = ?", (d['miqdori'], d['id']))
+        conn.commit(); conn.close(); return jsonify({"ok": True})
+    conn.close(); return jsonify({"ok": False, "msg": "Омборда етарли товар йўқ!"})
 
-@app.route('/api/del_doc/<int:id>')
-def del_doc(id):
-    conn = sqlite3.connect('shifo_pro.db')
-    conn.execute("DELETE FROM Doctors WHERE id = ?", (id,))
-    conn.execute("DELETE FROM Orders WHERE doc_id = ?", (id,))
-    conn.commit(); conn.close(); return jsonify(True)
+@app.route('/api/uchirish/<int:m_id>', methods=['POST'])
+def uchirish(m_id):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM Mahsulotlar WHERE id = ?", (m_id,)); conn.commit(); conn.close(); return jsonify({"ok": True})
+
+@app.route('/logout')
+def logout():
+    session.clear(); return redirect(url_for('login'))
 
 if __name__ == '__main__':
     db_init()
     app.run(host='0.0.0.0', port=5000)
+    
