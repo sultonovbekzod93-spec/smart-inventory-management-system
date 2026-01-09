@@ -1,219 +1,213 @@
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, flash
+from flask import Flask, render_template_string, request, redirect, url_for, flash, session
 import sqlite3
-from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "smart_ombor_pro_v4_2026"
+app.secret_key = 'bank_maxfiy_kalit_999' 
 
-# 1. МАЪЛУМОТЛАР БАЗАСИ
+# 1. МАЪЛУМОТЛАР БАЗАСИНИ СОЗЛАШ
 def get_db_connection():
-    conn = sqlite3.connect('smart_ombor_v4.db')
+    conn = sqlite3.connect('test_employees.db')
     conn.row_factory = sqlite3.Row
     return conn
 
 def db_init():
     conn = get_db_connection()
-    conn.execute('CREATE TABLE IF NOT EXISTS Mahsulotlar (id INTEGER PRIMARY KEY AUTOINCREMENT, nomi TEXT UNIQUE, miqdori INTEGER, narhi INTEGER)')
-    conn.execute('CREATE TABLE IF NOT EXISTS Users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT)')
-    if not conn.execute('SELECT * FROM Users WHERE username = ?', ('admin',)).fetchone():
-        conn.execute('INSERT INTO Users (username, password) VALUES (?, ?)', ('admin', generate_password_hash('1')))
+    conn.execute('''CREATE TABLE IF NOT EXISTS Employees 
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                     name TEXT NOT NULL, 
+                     department TEXT NOT NULL, 
+                     salary INTEGER NOT NULL)''')
     conn.commit()
     conn.close()
 
-# 2. ЯНГИЛАНГАН PRO ДИЗАЙН (HTML + CSS)
-PRO_HTML = """
+# 2. ВАЛИДАЦИЯ (МАЪЛУМОТЛАРНИ ТЕКШИРИШ)
+def validate_employee_data(name, dept, salary_str):
+    messages = []
+    if not name or not dept:
+        messages.append("Исм ва Бўлим мажбурий майдонлардир.")
+    try:
+        salary = int(salary_str)
+        if salary <= 0:
+            messages.append("Ойлик мусбат сон бўлиши керак.")
+    except (ValueError, TypeError):
+        messages.append("Ойлик фақат сон бўлиши керак.")
+        salary = None 
+    return messages, salary
+
+# 3. ЛОГИН САҲИФАСИ (HTML)
+login_html = """
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="utf-8">
+    <title>Кириш - Банк Тизими</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background-color: #f0f4f8; margin: 0; padding: 10px; }
-        .app-card { width: 100%; max-width: 480px; background: white; border-radius: 25px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); margin: auto; }
-        
-        /* Юқори қисм ва Чиқиш тугмаси */
-        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .title { color: #1a73e8; font-size: 22px; font-weight: bold; margin: 0; }
-        .logout-link { color: #d93025; text-decoration: none; font-weight: bold; font-size: 14px; padding: 5px 10px; border: 1px solid #fad2cf; border-radius: 8px; background: #fff1f1; }
-
-        /* Статистика */
-        .stats { display: flex; gap: 10px; margin-bottom: 20px; }
-        .stat-box { flex: 1; background: #eef5ff; padding: 12px; border-radius: 15px; text-align: center; border: 1px solid #d0e3ff; }
-        .stat-label { font-size: 10px; color: #777; text-transform: uppercase; }
-        .stat-val { font-size: 15px; font-weight: bold; color: #1a73e8; display: block; margin-top: 4px; }
-
-        /* Маълумот киритиш */
-        .input-group { background: #f8f9fa; padding: 15px; border-radius: 18px; margin-bottom: 20px; }
-        input { width: 100%; padding: 12px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 10px; box-sizing: border-box; outline: none; }
-        .btn-add { width: 100%; padding: 14px; background: #28a745; color: white; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; }
-
-        /* Жадвал */
-        table { width: 100%; border-collapse: collapse; }
-        th { background: #1a73e8; color: white; padding: 10px; font-size: 13px; text-align: center; }
-        th:first-child { border-radius: 10px 0 0 0; }
-        th:last-child { border-radius: 0 10px 0 0; }
-        td { padding: 12px 8px; text-align: center; border-bottom: 1px solid #eee; font-size: 14px; }
-        
-        /* Тугмачалар */
-        .action-btns { display: flex; gap: 5px; justify-content: center; }
-        .btn-sell { background: #ff9800; color: white; border: none; padding: 8px; border-radius: 8px; cursor: pointer; }
-        .btn-del { background: #f44336; color: white; border: none; padding: 8px; border-radius: 8px; cursor: pointer; }
+        body { font-family: sans-serif; background: #2c3e50; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 300px; text-align: center; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #3498db; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
+        .err { color: #e74c3c; font-size: 14px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
-    <div class="app-card">
-        <div class="top-bar">
-            <h1 class="title">📦 Smart Ombor PRO</h1>
-            <a href="/logout" class="logout-link">🚪 Чиқиш</a>
-        </div>
-
-        <div class="stats">
-            <div class="stat-box"><span class="stat-label">Жами товар</span><span id="st-qty" class="stat-val">0 та</span></div>
-            <div class="stat-box"><span class="stat-label">Умумий қиймат</span><span id="st-sum" class="stat-val">0 сўм</span></div>
-        </div>
-
-        <div class="input-group">
-            <input type="text" id="m-nomi" placeholder="Маҳсулот номи">
-            <input type="number" id="m-soni" placeholder="Миқдори">
-            <input type="number" id="m-narhi" placeholder="Нарҳи (сўм)">
-            <button class="btn-add" onclick="qoshish()">➕ ОМБОРГА ҚЎШИШ</button>
-        </div>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>Номи</th>
-                    <th>Қолдиқ</th>
-                    <th>Нарх</th>
-                    <th>Амал</th>
-                </tr>
-            </thead>
-            <tbody id="table-body"></tbody>
-        </table>
+    <div class="card">
+        <h2>🏦 Банк Тизими</h2>
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <p class="err">{{ message }}</p>
+        {% endfor %}
+        <form method="POST">
+            <input type="text" name="u" placeholder="Логин (1)" required>
+            <input type="password" name="p" placeholder="Пароль (1)" required>
+            <button type="submit">КИРИШ</button>
+        </form>
     </div>
-
-    <script>
-        async function yuklash() {
-            let res = await fetch('/api/mahsulotlar');
-            let data = await res.json();
-            let h = ""; let q = 0; let s = 0;
-            data.forEach(m => {
-                h += `<tr>
-                    <td><b>${m.nomi}</b></td>
-                    <td>${m.miqdori} та</td>
-                    <td>${Number(m.narhi).toLocaleString()}</td>
-                    <td class="action-btns">
-                        <button class="btn-sell" onclick="sotish(${m.id})" title="Сотиш">🛒</button>
-                        <button class="btn-del" onclick="uchirish(${m.id})" title="Ўчириш">🗑️</button>
-                    </td>
-                </tr>`;
-                q += Number(m.miqdori);
-                s += (Number(m.miqdori) * Number(m.narhi));
-            });
-            document.getElementById('table-body').innerHTML = h;
-            document.getElementById('st-qty').innerText = q + " та";
-            document.getElementById('st-sum').innerText = s.toLocaleString() + " сўм";
-        }
-
-        async function qoshish() {
-            let n = document.getElementById('m-nomi').value.trim();
-            let s = document.getElementById('m-soni').value;
-            let p = document.getElementById('m-narhi').value;
-            if(!n || s <= 0 || p <= 0) return alert("Тўғри тўлдиринг!");
-            await fetch('/api/qoshish', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({nomi: n, miqdori: s, narhi: p})
-            });
-            yuklash(); document.querySelectorAll('input').forEach(i => i.value='');
-        }
-
-        async function sotish(id) {
-            let s = prompt("Қанча сотмоқчисиз?");
-            if(!s || s <= 0) return;
-            let res = await fetch('/api/sotish', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({id: id, miqdori: s})
-            });
-            let data = await res.json();
-            if(!data.ok) alert(data.msg);
-            yuklash();
-        }
-
-        async function uchirish(id) {
-            if(confirm("Ўчирилсинми?")) { await fetch('/api/uchirish/'+id, {method:'POST'}); yuklash(); }
-        }
-        window.onload = yuklash;
-    </script>
 </body>
 </html>
 """
 
-# 3. BACKEND (ЛОГИКА)
+# 4. АСОСИЙ САҲИФА (HTML)
+main_html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Банк Бошқаруви</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f7f6; padding: 20px; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 15px rgba(0,0,0,0.1); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .form-section { display: flex; gap: 20px; margin: 20px 0; }
+        .box { flex: 1; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
+        input { padding: 8px; margin: 5px 0; width: 90%; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px; border: none; border-radius: 4px; cursor: pointer; color: white; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 12px; border-bottom: 1px solid #ddd; text-align: left; }
+        th { background: #3498db; color: white; }
+        .flash-error { color: red; } .flash-success { color: green; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>🏦 Банк Ходимлари</h2>
+            <a href="/logout" style="color: red; text-decoration: none;">🚪 Чиқиш</a>
+        </div>
+
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <p class="flash-{{ category }}">{{ message }}</p>
+        {% endfor %}
+
+        <div class="form-section">
+            <div class="box" style="background: #e8ecef;">
+                <h4>➕ Қўшиш</h4>
+                <form method="POST">
+                    <input type="text" name="name" placeholder="Исм" required>
+                    <input type="text" name="dept" placeholder="Бўлим" required>
+                    <input type="number" name="salary" placeholder="Ойлик" required>
+                    <button type="submit" style="background: #27ae60; width: 100%;">Сақлаш</button>
+                </form>
+            </div>
+            <div class="box" style="background: #d1ecf1;">
+                <h4>🔍 Қидириш</h4>
+                <form method="GET">
+                    <input type="text" name="search" placeholder="Исм ёки бўлим..." value="{{ sq }}">
+                    <button type="submit" style="background: #17a2b8; width: 100%;">Қидириш</button>
+                    <a href="/" style="display:block; text-align:center; margin-top:5px; color:#666; font-size:12px;">Тозалаш</a>
+                </form>
+            </div>
+        </div>
+
+        <table>
+            <tr><th>ID</th><th>Исм</th><th>Бўлим</th><th>Ойлик</th><th>Амаллар</th></tr>
+            {% for row in employees %}
+            <tr>
+                <td>{{ row['id'] }}</td>
+                <td><b>{{ row['name'] }}</b></td>
+                <td>{{ row['department'] }}</td>
+                <td>{{ "{:,.0f}".format(row['salary']) }} сўм</td>
+                <td>
+                    <a href="{{ url_for('edit', eid=row['id']) }}">✍️</a> | 
+                    <a href="{{ url_for('delete', eid=row['id']) }}" onclick="return confirm('Ўчирилсинми?')">❌</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</body>
+</html>
+"""
+
+# 5. ЙЎНАЛИШЛАР (BACKEND)
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        u, p = request.form.get('u', '').strip(), request.form.get('p', '').strip()
-        conn = get_db_connection()
-        user = conn.execute('SELECT * FROM Users WHERE username = ?', (u,)).fetchone()
-        conn.close()
-        if user and check_password_hash(user['password'], p):
-            session['auth'] = True
+        # .strip().lower() - хатоликни олдини олади
+        u = request.form.get('u').strip().lower()
+        p = request.form.get('p').strip().lower()
+        if u == '1' and p == '1':
+            session['logged_in'] = True
             return redirect(url_for('index'))
-        flash("Хато!")
-    return render_template_string("""
-        <div style="max-width:300px; margin:100px auto; text-align:center;">
-            <h2>📦 Smart Ombor</h2>
-            <form method="POST">
-                <input name="u" placeholder="Логин" style="width:100%; padding:10px; margin:5px 0;">
-                <input type="password" name="p" placeholder="Пароль" style="width:100%; padding:10px; margin:5px 0;">
-                <button type="submit" style="width:100%; padding:10px; background:#1a73e8; color:white; border:none;">КИРИШ</button>
-            </form>
-        </div>
-    """)
-
-@app.route('/')
-def index():
-    if not session.get('auth'): return redirect(url_for('login'))
-    return render_template_string(PRO_HTML)
-
-@app.route('/api/mahsulotlar')
-def get_m():
-    conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM Mahsulotlar").fetchall()
-    conn.close()
-    return jsonify([dict(row) for row in rows])
-
-@app.route('/api/qoshish', methods=['POST'])
-def qosh():
-    d = request.json
-    conn = get_db_connection()
-    check = conn.execute("SELECT id FROM Mahsulotlar WHERE nomi = ?", (d['nomi'],)).fetchone()
-    if check:
-        conn.execute("UPDATE Mahsulotlar SET miqdori = miqdori + ? WHERE id = ?", (d['miqdori'], check['id']))
-    else:
-        conn.execute("INSERT INTO Mahsulotlar (nomi, miqdori, narhi) VALUES (?, ?, ?)", (d['nomi'], d['miqdori'], d['narhi']))
-    conn.commit(); conn.close(); return jsonify({"ok": True})
-
-@app.route('/api/sotish', methods=['POST'])
-def sotish():
-    d = request.json
-    conn = get_db_connection()
-    m = conn.execute("SELECT miqdori FROM Mahsulotlar WHERE id = ?", (d['id'],)).fetchone()
-    if m and m['miqdori'] >= int(d['miqdori']):
-        conn.execute("UPDATE Mahsulotlar SET miqdori = miqdori - ? WHERE id = ?", (d['miqdori'], d['id']))
-        conn.commit(); conn.close(); return jsonify({"ok": True})
-    conn.close(); return jsonify({"ok": False, "msg": "Омборда етарли товар йўқ!"})
-
-@app.route('/api/uchirish/<int:m_id>', methods=['POST'])
-def uchirish(m_id):
-    conn = get_db_connection()
-    conn.execute("DELETE FROM Mahsulotlar WHERE id = ?", (m_id,)); conn.commit(); conn.close(); return jsonify({"ok": True})
+        else:
+            flash('Логин ёки пароль хато!', 'error')
+    return render_template_string(login_html)
 
 @app.route('/logout')
 def logout():
-    session.clear(); return redirect(url_for('login'))
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    sq = request.args.get('search', '')
+
+    if request.method == 'POST':
+        name, dept, sal_s = request.form['name'], request.form['dept'], request.form['salary']
+        errs, salary = validate_employee_data(name, dept, sal_s)
+        if errs:
+            for e in errs: flash(e, 'error')
+        else:
+            conn.execute('INSERT INTO Employees (name, department, salary) VALUES (?,?,?)', (name, dept, salary))
+            conn.commit()
+            flash(f"{name} қўшилди!", 'success')
+        conn.close()
+        return redirect('/')
+
+    if sq:
+        emps = conn.execute("SELECT * FROM Employees WHERE name LIKE ? OR department LIKE ?", ('%'+sq+'%', '%'+sq+'%')).fetchall()
+    else:
+        emps = conn.execute("SELECT * FROM Employees").fetchall()
+    conn.close()
+    return render_template_string(main_html, employees=emps, sq=sq)
+
+@app.route('/delete/<int:eid>')
+def delete(eid):
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    conn.execute('DELETE FROM Employees WHERE id = ?', (eid,))
+    conn.commit(); conn.close()
+    flash("Ўчирилди!", "success")
+    return redirect('/')
+
+@app.route('/edit/<int:eid>', methods=['GET', 'POST'])
+def edit(eid):
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    emp = conn.execute('SELECT * FROM Employees WHERE id = ?', (eid,)).fetchone()
+    if request.method == 'POST':
+        n, d, s_s = request.form['name'], request.form['dept'], request.form['salary']
+        errs, salary = validate_employee_data(n, d, s_s)
+        if not errs:
+            conn.execute('UPDATE Employees SET name=?, department=?, salary=? WHERE id=?', (n, d, salary, eid))
+            conn.commit(); conn.close()
+            return redirect('/')
+    conn.close()
+    return render_template_string("<h3>Таҳрирлаш</h3><form method='POST'><input name='name' value='{{e.name}}'><br><input name='dept' value='{{e.department}}'><br><input name='salary' value='{{e.salary}}'><br><button>Янгилаш</button></form>", e=emp)
 
 if __name__ == '__main__':
     db_init()
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, debug=True)
     
