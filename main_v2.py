@@ -1,15 +1,19 @@
 from flask import Flask, render_template_string, request, redirect, url_for, flash, session
 import sqlite3
+import os
 
 app = Flask(__name__)
 app.secret_key = 'bank_maxfiy_kalit_999' 
 
-# 1. МАЪЛУМОТЛАР БАЗАСИНИ СОЗЛАШ
+# МАЪЛУМОТЛАР БАЗАСИ ЙЎЛИ
+DB_PATH = 'test_employees.db'
+
 def get_db_connection():
-    conn = sqlite3.connect('test_employees.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+# БАЗАНИ ВА ЖАДВАЛНИ ЯРАТИШ
 def db_init():
     conn = get_db_connection()
     conn.execute('''CREATE TABLE IF NOT EXISTS Employees 
@@ -20,7 +24,9 @@ def db_init():
     conn.commit()
     conn.close()
 
-# 2. ВАЛИДАЦИЯ (МАЪЛУМОТЛАРНИ ТЕКШИРИШ)
+# БАЗАНИ ИШГА ТУШИРИШ (Render учун муҳим)
+db_init()
+
 def validate_employee_data(name, dept, salary_str):
     messages = []
     if not name or not dept:
@@ -34,7 +40,6 @@ def validate_employee_data(name, dept, salary_str):
         salary = None 
     return messages, salary
 
-# 3. ЛОГИН САҲИФАСИ (HTML)
 login_html = """
 <!DOCTYPE html>
 <html>
@@ -65,7 +70,6 @@ login_html = """
 </html>
 """
 
-# 4. АСОСИЙ САҲИФА (HTML)
 main_html = """
 <!DOCTYPE html>
 <html>
@@ -92,11 +96,9 @@ main_html = """
             <h2>🏦 Банк Ходимлари</h2>
             <a href="/logout" style="color: red; text-decoration: none;">🚪 Чиқиш</a>
         </div>
-
         {% for category, message in get_flashed_messages(with_categories=true) %}
             <p class="flash-{{ category }}">{{ message }}</p>
         {% endfor %}
-
         <div class="form-section">
             <div class="box" style="background: #e8ecef;">
                 <h4>➕ Қўшиш</h4>
@@ -116,7 +118,6 @@ main_html = """
                 </form>
             </div>
         </div>
-
         <table>
             <tr><th>ID</th><th>Исм</th><th>Бўлим</th><th>Ойлик</th><th>Амаллар</th></tr>
             {% for row in employees %}
@@ -137,11 +138,9 @@ main_html = """
 </html>
 """
 
-# 5. ЙЎНАЛИШЛАР (BACKEND)
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        # .strip().lower() - хатоликни олдини олади
         u = request.form.get('u').strip().lower()
         p = request.form.get('p').strip().lower()
         if u == '1' and p == '1':
@@ -188,7 +187,8 @@ def delete(eid):
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     conn.execute('DELETE FROM Employees WHERE id = ?', (eid,))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
     flash("Ўчирилди!", "success")
     return redirect('/')
 
@@ -202,12 +202,23 @@ def edit(eid):
         errs, salary = validate_employee_data(n, d, s_s)
         if not errs:
             conn.execute('UPDATE Employees SET name=?, department=?, salary=? WHERE id=?', (n, d, salary, eid))
-            conn.commit(); conn.close()
+            conn.commit()
+            conn.close()
             return redirect('/')
     conn.close()
-    return render_template_string("<h3>Таҳрирлаш</h3><form method='POST'><input name='name' value='{{e.name}}'><br><input name='dept' value='{{e.department}}'><br><input name='salary' value='{{e.salary}}'><br><button>Янгилаш</button></form>", e=emp)
+    edit_html = """
+    <h3>Таҳрирлаш</h3>
+    <form method='POST'>
+        Исм: <input name='name' value='{{e.name}}'><br>
+        Бўлим: <input name='dept' value='{{e.department}}'><br>
+        Ойлик: <input name='salary' value='{{e.salary}}'><br>
+        <button>Янгилаш</button>
+    </form>
+    <br><a href="/">Ортга</a>
+    """
+    return render_template_string(edit_html, e=emp)
 
 if __name__ == '__main__':
-    db_init()
+    # Маҳаллий ишлатиш учун
     app.run(host='0.0.0.0', port=5000, debug=True)
     
